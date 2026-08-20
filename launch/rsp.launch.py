@@ -6,6 +6,8 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import xacro
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 def generate_launch_description():
 
     # Check if we're told to use sim time and rviz
@@ -16,7 +18,7 @@ def generate_launch_description():
     pkg_path = get_package_share_directory('my_bot')
     xacro_file = os.path.join(pkg_path, 'description', 'robot.urdf.xacro')
     robot_description_config = xacro.process_file(xacro_file).toxml()
-    world_file_path = os.path.join(pkg_path, 'worlds', 'empty.world')
+    world_file_path = os.path.join(pkg_path, 'worlds', 'world1.world')
     config_path = os.path.join(pkg_path, 'config', 'gz_rob1.config')
     # Create a robot_state_publisher node
     params = {'robot_description': robot_description_config, 'use_sim_time': use_sim_time}
@@ -58,7 +60,7 @@ def generate_launch_description():
 
     # Launch Gazebo window (Fortress / Ignition)
     ign_gazebo = ExecuteProcess(
-        cmd=['ign', 'gazebo', '-r', 'empty.sdf',world_file_path, '--gui-config', config_path],
+        cmd=['ign', 'gazebo', '-r','empty.sdf'],
         output='screen'
     )
 
@@ -66,10 +68,30 @@ def generate_launch_description():
     node_spawn_entity = Node(
         package='ros_gz_sim',
         executable='create',
-        arguments=['-topic', 'robot_description'],
+        arguments=['-topic', 'robot_description','-name', 'robot101',],
         output='screen'
     )
 
+    node_point_cloud = ComposableNodeContainer(
+        name='depth_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='depth_image_proc',
+                plugin='depth_image_proc::PointCloudXyzNode',
+                name='point_cloud_xyz_node',
+                remappings=[
+                    ('image_rect', '/depth_camera/points/depth_image'),
+                    ('camera_info', '/depth_camera/points/camera_info'),
+                    ('points', '/depth_camera/points')
+                ],
+                parameters=[{'use_sim_time': use_sim_time}]
+            )
+        ],
+        output='screen'
+)
     # Command Velocity Bridge ROS 2 <-> Gazebo
     node_ros_gz_bridge = Node(
         package='ros_gz_bridge',
@@ -78,7 +100,10 @@ def generate_launch_description():
                    '/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
                    '/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V',
                    '/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
-                   '/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo'],
+                   '/depth_camera@sensor_msgs/msg/Image@gz.msgs.Image',
+                   '/depth_camera/depth_image@sensor_msgs/msg/Image@gz.msgs.Image',
+                   '/depth_camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloud2',
+                   '/depth_camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo'],
         output='screen'
     )
 # Compress the raw image stream for lower bandwidth usage
@@ -88,8 +113,8 @@ def generate_launch_description():
         executable='republish',
         arguments=['raw', 'compressed'],
         remappings=[
-            ('in', '/image_raw'),
-            ('out', '/image_raw')  # Automatically outputs to /image_raw/compressed
+            ('in/raw', '/depth_camera/image_raw'),
+            ('out/compressed', '/depth_camera/compressed_image')  # Automatically outputs to /image_raw/compressed
         ],
         parameters=[{
             'use_sim_time': use_sim_time,
@@ -115,5 +140,6 @@ def generate_launch_description():
         node_spawn_entity,
         node_ros_gz_bridge,
         bridge,
-        node_image_compressor
+        node_image_compressor,
+        node_point_cloud
     ])
